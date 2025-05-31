@@ -1,0 +1,10 @@
+Set-Location "$HOME\Documents\PowerShell\ExitAccountFunctions"
+
+# Dot-source only the ones you need, or all of them:
+. .\Get-ADUserDetails.ps1
+. .\Disable-AndHideUser.ps1
+. .\Confirm-YesNo.ps1
+. .\Log-UserExitDetails.ps1
+. .\Perform-ExitProcedure.ps1
+. .\Set-ExitUserAccount.ps1
+. .\Show-ExitUserMenu.ps1
