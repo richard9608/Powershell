@@ -3,90 +3,141 @@
 #--------------------------------------------------------------------------------------------
 #--------------------------------------------------------------------------------------------
 
-
-#  Generates a management-directive-compliant SecureString password
-function New-MDOTSHAPasswordLR {
-    [CmdletBinding()]
-    param(
-        [string]   $Prefix = 'MDOTSHA', # fixed text at the start
-        [datetime] $Date = (Get-Date), # today’s date by default
-        [string]   $Suffix = '@'                       # symbol at the end
-    )
-
-    # Build plain-text password
-    $datePart = $Date.ToString('MMMMdyyyy')           # e.g. "May282025"
-    $plain = "$Prefix$($datePart)$Suffix"        # e.g. "MDOTSHAMay282025@"
-
-    # Return as SecureString
-    return (ConvertTo-SecureString $plain -AsPlainText -Force)
+function groups {
+    param([Parameter(mandatory = $true)]
+        [string]$user)
+    Get-ADPrincipalGroupMembership -Identity $user | Sort-Object name | Select-Object -exp name
 }
+
 
 #--------------------------------------------------------------------------------------------
+function findaccount {
+    param([string]$user)
+    $DC = "mdotgbfrdc1.ad.mdot.mdstate",
+    "MAABWIDC1.maa.ad.mdot.mdstate",
+    "TSOGBDC1.mdothq.ad.mdot.mdstate",
+    "MDTAICCDC01.mdta.ad.mdot.mdstate",
+    "MPADMTENTDC01.mpa.ad.mdot.mdstate",
+    "MTACWDRDC1.mtant1.ad.mdot.mdstate",
+    "MVAWSDC1.mvant1.ad.mdot.mdstate",
+    "SHAGBDC1.shacadd.ad.mdot.mdstate"
+    $result = $DC | ForEach-Object { Get-ADUser -LDAPFilter "(samaccountname=$user*)" -Server $_ -Properties Department, Office, Description | Sort-Object SamAccountName | Select-Object Department, Enabled, SamAccountName, GivenName, SurName, Office, Description }
+    $result | Format-Table -AutoSize
+}
+ 
 
-# Generates a management-directive-compliant SecureString password
-function New-MDOTSHAPassword {
+# --------------------------------------------------------------------
+
+function Add-SHARecord {
     [CmdletBinding()]
-    param(
-        [string]   $Prefix = 'MDOTSHA', # fixed text at the start
-        [datetime] $Date = (Get-Date), # today’s date by default
-        [string]   $Suffix = '@'                       # symbol at the end
-    )
+    param ()
 
-    # Build plain-text password
-    $datePart = $Date.ToString('MMMMdyyyy')           # e.g. "May282025"
-    $plain = "$Prefix$($datePart)$Suffix"        # e.g. "MDOTSHAMay282025@"
+    # --- Fetch AD User Info ---
+    $userId = Read-Host "Enter UserID (sAMAccountName)"
+    $adUser = Get-ADUser -Identity $userId -Properties EmailAddress, GivenName, Surname, EmployeeID
+    if (-not $adUser) {
+        Write-Host "❌ User not found in AD." -ForegroundColor Red
+        return
+    }
 
-    # Return as SecureString
-    return (ConvertTo-SecureString $plain -AsPlainText -Force)
+    # --- Ask which records to add ---
+    Write-Host "`nWhich record(s) do you want to add? (Enter numbers separated by comma, e.g. 1,2)"
+    Write-Host "1. Adds"
+    Write-Host "2. FMT"
+    Write-Host "3. License"
+    $recordTypes = Read-Host "Selection"
+    $selected = $recordTypes -split "," | ForEach-Object { $_.Trim() }
+
+    # --- Always collected fields (if needed for any selected sheet) ---
+    if ($selected -contains "1" -or $selected -contains "2") {
+        $ou = Read-Host "Which OU?"
+    }
+    if ($selected -contains "1" -or $selected -contains "3") {
+        $srNumber = Read-Host "SR#"
+    }
+    if ($selected -contains "3") {
+        $licenseType = Read-Host "Enter License Type (F3 or G3)"
+        $addedOrRemoved = Read-Host "Was the License Added or Removed?"
+        $creation = Read-Host "Is there a creation date? (yes/no)"
+        $creationDate = if ($creation -eq "yes") { (Get-Date).ToShortDateString() } else { "" }
+        $deletion = Read-Host "Is there a deletion date? (yes/no)"
+        $deletionDate = if ($deletion -eq "yes") { (Get-Date).ToShortDateString() } else { "" }
+    }
+
+    # --- Always reused fields ---
+    $email = $adUser.EmailAddress -replace '\.consultant'
+    $first = $adUser.GivenName
+    $last = $adUser.Surname
+    $ein = $adUser.EmployeeID
+    $workedBy = "LRichardson2"  # Always this value
+
+    # --- Now generate and save each record as needed ---
+    if ($selected -contains "1") {
+        $add = [PSCustomObject]@{
+            email           = $email
+            first_name      = $first
+            last_name       = $last
+            group_name      = "SHA"
+            OU              = $ou
+            'Creation Date' = (Get-Date).ToShortDateString()
+            'Notes'         = ""
+            'EIN?'          = $ein
+            'SR#'           = $srNumber
+            "Worked By"     = $workedBy
+        }
+        $addsPath = "\\shahqfs1\admshared\oit\TSD\Network\Document\Security Mentor\Current\Maryland_State_Trainee_Adds_2025.csv"
+        $add | Export-Csv -Path $addsPath -NoTypeInformation -Append
+        Write-Host "✅ 'Adds' record written."
+    }
+
+    if ($selected -contains "2") {
+        $fmt = [PSCustomObject]@{
+            email           = $email
+            first_name      = $first
+            last_name       = $last
+            group_name      = "SHA"
+            OU              = $ou
+            'Creation Date' = (Get-Date).ToShortDateString()
+            'Notes'         = ""
+            'EIN?'          = $ein
+        }
+        $fmtPath = "\\shahqfs1\admshared\oit\TSD\Network\Document\Security Mentor\Current\Maryland_State_FMT_Adds_2025.csv"
+        $fmt | Export-Csv -Path $fmtPath -NoTypeInformation -Append
+        Write-Host "✅ 'FMT' record written."
+    }
+
+    if ($selected -contains "3") {
+        $lic = [PSCustomObject]@{
+            email                   = $email
+            first_name              = $first
+            last_name               = $last
+            License_Type            = $licenseType
+            'SR#'                   = $srNumber
+            Worked_By               = $workedBy
+            'License_Added/Removed' = $addedOrRemoved
+            Notes                   = ""
+            Creation_Date           = $creationDate
+            Deletion_Date           = $deletionDate
+        }
+        # Write to CSV as before
+        $licCsvPath = "$HOME\Documents\LicenseInfo.csv"
+        $lic | Export-Csv -Path $licCsvPath -NoTypeInformation -Append
+        Write-Host "✅ 'License' record written to CSV."
+
+        # Write to Excel (worksheet SHA_Licenses, hardcoded path)
+        $pathToExcel = '\\shahqfs1\admshared\oit\TSD\Network\Document\Security Mentor\Current\SHA_Licenses.xlsx'
+        $worksheetName = 'SHA_Licenses'
+        $lic | Export-Excel -Path $pathToExcel -WorksheetName $worksheetName -Append
+        Write-Host "✅ 'License' record appended to Excel worksheet ($worksheetName)."
+    }
+
+    Write-Host "`nAll selected records have been processed."
 }
 
-# Helper: Outputs the plain password as a string (not SecureString!)
-function Get-MDOTSHAPasswordPlain {
-    $pwd = New-MDOTSHAPassword
-    (New-Object System.Management.Automation.PSCredential('dummy', $pwd)).GetNetworkCredential().Password
-}
+# --------------------------------------------------------------------
 
-# Resets an AD user's password, auto-generating if none supplied
-function Resetpassword {
-    [CmdletBinding()]
-    param(
-        # Prompt interactively if no username passed
-        [string] $Username = $(Read-Host 'Enter the Username to reset'),
 
-        # Optional: string or SecureString
-        [object] $NewPassword
-    )
 
-    # Determine and normalize password input
-    if (-not $PSBoundParameters.ContainsKey('NewPassword')) {
-        # No password passed → generate as SecureString and extract plain text
-        $NewPassword = New-MDOTSHAPassword
-        $plainPassword = (New-Object System.Management.Automation.PSCredential('dummy', $NewPassword)).GetNetworkCredential().Password
-    }
-    elseif ($NewPassword -is [string]) {
-        # Plain text passed → convert and store plain copy
-        $plainPassword = $NewPassword
-        $NewPassword = ConvertTo-SecureString $plainPassword -AsPlainText -Force
-    }
-    elseif ($NewPassword -is [System.Security.SecureString]) {
-        # SecureString passed → extract plain text
-        $plainPassword = (New-Object System.Management.Automation.PSCredential('dummy', $NewPassword)).GetNetworkCredential().Password
-    }
-    else {
-        throw "Invalid type for -NewPassword; must be a SecureString or string."
-    }
-
-    # Perform the reset
-    Set-ADAccountPassword -Identity $Username -NewPassword $NewPassword -Reset
-    Set-ADUser            -Identity $Username -ChangePasswordAtLogon $true
-
-    # Output results
-    Write-Host "✅ Password for $Username has been reset and requires a change at next logon." -ForegroundColor Green
-    Write-Host "🔑 New password: $plainPassword"                              -ForegroundColor Yellow
-    Write-Host "⚠️  Please ensure it meets MDOTApril282025 complexity requirements." -ForegroundColor Red
-}
-
-#--------------------------------------------------------------------------------------------
 function Clear-ADExtensionAttribute1 {
     [CmdletBinding()]
     param (
@@ -133,7 +184,7 @@ function getapps {
             Sort-Object name | Select-Object Version, Name } | Format-Table Version, Name, PSComputerName -AutoSize
 }
 #--------------------------------------------------------------------------------------------
-function Replace-EmailName {
+function Set-EmailName {
     # Function to replace 'LRichardson2' with user-provided input
 
     # Prompt user for the replacement text
@@ -216,40 +267,9 @@ function SetAccountExpiration {
 
 # The script now only executes when Set-AccountExpiration is called explicitly
 
-
-
-#--------------------------------------------------------------------------------------------
-function Set-ConsultAtt {
-    param ()
-
-    $username = (Read-Host "Enter the user's SAM Account Name").Trim()
-
-    if ($username) {
-        try {
-            # Retrieve the user's current DisplayName
-            $user = Get-ADUser -Filter "SamAccountName -eq '$username'" -Properties DisplayName
-
-            if ($null -ne $user) {
-                # Extract the base Display Name
-                $baseDisplayName = $user.DisplayName
-
-                # Construct the new Display Name
-                $newDisplayName = "$baseDisplayName (Consultant)"
-
-                # Update the user's attributes
-                Set-ADUser -Identity $username -DisplayName $newDisplayName -Replace @{ExtensionAttribute1 = 'SHA Consultant' }
-            }
-        }
-        catch {
-            # Silently handle errors
-            return
-        }
-    }
-}
 #--------------------------------------------------------------------------------------------
 
-
-function groups {
+function groupsLR {
     param (
         [Parameter(Mandatory = $true)]
         [string]$User
@@ -271,7 +291,6 @@ function groups {
         Write-Warning "Failed to retrieve groups for user '$User'. Error: $_"
     }
 }
-
 #--------------------------------------------------------------------------------------------
 
 function UpdateEIN {
@@ -1960,7 +1979,7 @@ function pw {
         [switch]$rt,
         [switch]$red)
     $entpw = @{pw = 'B@ltimorian36@!' }
-    $admpw = @{pw = 'B@ltimorian36@!' }
+    $admpw = @{pw = 'PeterPan88S*' }
     $mgrpw = @{pw = 'tot@1C0ntro!' }
     $dmzpw = @{pw = 'KlwUkeGe&2ef' }
     $mail = @{id = 'LRichardson2@mdot.state.md.us' }
@@ -2219,7 +2238,10 @@ function NewUserReply {
 }
 #--------------------------------------------------------------------------------------------
 function LitSheet {
-    param($a)
+    param(
+        [parameter(Mandatory = $true)]
+        [string]$a
+    )
     $add = [PSCustomObject]@{
         email                              = $([string]$e = (Get-ADUser $a -properties *).EmailAddress; $e = $e -replace '\.consultant'; $e);
         first_name                         = (Get-ADUser $a -properties *).GivenName;
@@ -2232,8 +2254,14 @@ function LitSheet {
 }
 #--------------------------------------------------------------------------------------------
 #Remove M:Drive from Server and Clear Homedirectory
-function remdir {
-    param([string]$user, [string]$path)
+function remove-homedirectory {
+    param(
+        [parameter(Mandatory = $true)]
+        [string]$user,
+
+        [parameter(Mandatory = $true)]
+        [string]$path
+    )
     Remove-Item $path -Force -Recurse; Set-ADUser $user -Clear Homedirectory, HomeDrive
 }
 #--------------------------------------------------------------------------------------------
@@ -2801,7 +2829,10 @@ function hideuser {
 
 #--------------------------------------------------------------------------------------------
 function findaccount2 {
-    param([string]$user)
+    param(
+        [parameter(Mandatory = $true)]
+        [string]$user
+    )
     $DC = "mdotgbfrdc1.ad.mdot.mdstate",
     "MAABWIDC1.maa.ad.mdot.mdstate",
     "TSOGBDC1.mdothq.ad.mdot.mdstate",
@@ -2818,7 +2849,17 @@ function findaccount2 {
 # Function to Search First and Last Name
 
 function findaccount1 {
-    param([string]$firstname, [string]$lastname)
+    param(
+        [parameter(Mandatory = $true)]
+        [string]$firstname,
+
+        [parameter(Mandatory = $true)]
+        [string]$lastname
+    )
+    # Search for users based on first and last name across multiple domain controllers.
+    # Define the domain controllers to search.                      
+    # You can add or remove domain controllers as needed.
+    # Ensure the domain controllers are reachable and have the necessary permissions.   
     $DC = "mdotgbfrdc1.ad.mdot.mdstate",
     "MAABWIDC1.maa.ad.mdot.mdstate",
     "TSOGBDC1.mdothq.ad.mdot.mdstate",
@@ -3459,6 +3500,45 @@ function EnableArchive {
     }
 }
 
-
-
 #--------------------------------------------------------------------------------------------
+function Set-ConsultAtt {
+    param ()
+
+    $username = (Read-Host "Enter the user's SAM Account Name").Trim()
+
+    if ($username) {
+        try {
+            # Retrieve the user's current DisplayName
+            $user = Get-ADUser -Filter "SamAccountName -eq '$username'" -Properties DisplayName
+
+            if ($null -ne $user) {
+                # Extract the base Display Name
+                $baseDisplayName = $user.DisplayName
+
+                # Construct the new Display Name
+                $newDisplayName = "$baseDisplayName (Consultant)"
+
+                # Update the user's attributes
+                Set-ADUser -Identity $username -DisplayName $newDisplayName -Replace @{ExtensionAttribute1 = 'SHA Consultant' }
+            }
+        }
+        catch {
+            # Silently handle errors
+            return
+        }
+    }
+}
+#--------------------------------------------------------------------------------------------
+function New-MDOTSHAPasswordLR {
+    [CmdletBinding()]
+    param (
+        [string]  $Prefix = 'MDOTSHA', # fixed text at the start
+        [datetime]$Date = (Get-Date), # today’s date by default
+        [string]  $Suffix = '@'                      # symbol at the end
+    )
+    # Format as FullMonthName + Day (no leading zero) + Year
+    $datePart = $Date.ToString('MMMMdyyyy')
+    # Combine and output
+    "$Prefix$($datePart)$Suffix"
+}
+

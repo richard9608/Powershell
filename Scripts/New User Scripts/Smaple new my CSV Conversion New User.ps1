@@ -1,4 +1,4 @@
-Smaple New User 
+Sample New User 
 
 
 $userid = $csv.UserID

@@ -1,3 +1,23 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 function New-MDOTADUser {
     [CmdletBinding()]
     param (
@@ -20,9 +40,10 @@ function New-MDOTADUser {
 
         [string]$EmployeeID
     )
-
+    
+    # Microsoft UPN @mdot.state.md.us          
     $email = "$UserID@mdot.state.md.us"
-
+    
     # Get Template User Info
     $templateUserInfo = Get-ADUser $TemplateUser -Properties City, Company, Department, Description, Office, PostalCode, StreetAddress, State, HomeDirectory, MemberOf
 
@@ -104,16 +125,17 @@ function New-MDOTADUser {
     }
 }
 #--------------------------------------------------------------------------------------------
-<#
-
-    New-MDOTADUser -UserID VHymes1 `
-        -FirstName Vanessa `
-        -LastName Hymes `
-        -Password "Kr)ypt5@4_Cub@tD" `
-        -TemplateUser "ORE_TEMPLATE" `
+#
+ 
+    New-MDOTADUser -UserID EAllocca `
+        -FirstName Edward `
+        -LastName  Allocca `
+        -Password "MDOTSHAJune92025@" `
+        -TemplateUser "OED_TEMPLATE" `
+        -Phone "410-221-1635" `
+        -EmployeeID "500590"
        
 
 
      
 
-#>

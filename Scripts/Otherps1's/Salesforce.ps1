@@ -11,21 +11,17 @@ Import-Module ImportExcel
 # Define the list of users and groups
 $groupsToCheck = @("SHASalesforceAzure_SSO", "SHA_SFDC_SSO")  # Replace with your groups
 # Replace with your users (sAMAccountNames)
-$names = "apierce
-dwyatt
-ddarling
-dphillips1
-jchambers
-jminer1
-JJenkins5
-jdwyer1
-JThompson4
-phusselbee
-rmartin
-shiggs
-tmaqui
-tcashen
-vdjeunga".Split("`n")
+$names = "dmoore7
+dpowell2
+jspindler1
+rfrantz1
+jconner2
+jfelgenhou
+mplath
+cdiaz
+jscurry1
+hholman2
+dsommers".Split("`n")
 
 #--------------------------------------------------------------------------------------------
 
