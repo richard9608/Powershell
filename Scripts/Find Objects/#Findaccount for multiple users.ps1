@@ -1,20 +1,32 @@
 #Findaccount for multiple users
 # This script searches for Active Directory users based on their first and last names or usernames.
 #--------------------------------------------------------------------------------------------
-$names = "Bryan Chant
-Neha Singh
-JAYDEN STEVENS".Split("`n")
+$names = "RAIMOND BALBUENA
+KATHLEEN BARRY
+CRAIG BUCHANAN
+Bryan Chant
+RONNELL CORNISH
+ANDRAE FRANCOIS
+SHARDE GRINDER
+APRIL HALL
+Russell Heino
+Jay Ingle
+Georgios Margaritis
+MURITHI MARSHALL
+Kari Myers
+Anthony Porco".Split("`n")
 
 $names.Count
 
-$names | ForEach-Object {
+$names | ForEach-Object { get-aduser -Filter { givenname -like $_.Split(' ')[0] -and sn -like $_.Split(' ')[1] } -Properties Department, Office, Description | Sort-Object SamAccountName | Select-Object Department, Enabled, SamAccountName, GivenName, SurName, Office, Description } | Format-Table -AutoSize
+#--------------------------------------------------------------------------------------------   
     $parts = $_ -split ' '
     $first = $parts[0]
     $last = $parts[1]
     findaccount1 $first $last
 }
-   
 
+$names | ForEach-Object { get-aduser -Filter { firstname -like $first and  Lastname -like $last } -Properties Department, Office, Description | Sort-Object SamAccountName | Select-Object Department, Enabled, SamAccountName, GivenName, SurName, Office, Description } | Format-Table -AutoSize
 
 #--------------------------------------------------------------------------------------------
 $names = "Eallocca
@@ -196,3 +208,14 @@ function Findaccount3 {
 
 
 
+
+
+finduser KBarry1
+finduser RCornish3
+finduser SGrinder
+finduser AHall5
+finduser RHeino
+finduser JIngle
+finduser Mmarshall1
+finduser KMyers4
+finduser APorco
