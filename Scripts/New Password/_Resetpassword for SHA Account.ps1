@@ -2,10 +2,10 @@ Resetpassword for SHA Account
 
 #--------------------------------------------------------------------------------------------
 # Enable the account
-Enable-ADAccount -Identity "HMohammed"
+Enable-ADAccount -Identity "JGreer"
 #--------------------------------------------------------------------------------------------
 # Reset password for a specific user account
-$Username = "HMohammed"
+$Username = "JGreer"
 $NewPassword = ConvertTo-SecureString "MdotSH@Jun1029" -AsPlainText -Force
 Set-ADAccountPassword -Identity $Username -NewPassword $NewPassword -Reset
 Set-ADUser -Identity $Username -ChangePasswordAtLogon $true
@@ -21,6 +21,15 @@ Reset-ADServiceAccountPassword -Identity "shainterview3" -NewPassword (ConvertTo
 
 
 
+
+
+
+
+
+
+
+# Grant full permissions to user's folder
+icacls "\\shahqfs2\dgnusers\oos\TEteyBenissan" /grant "TEteyBenissan:(F)"
 
 
 
