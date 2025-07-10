@@ -4,6 +4,50 @@
 #--------------------------------------------------------------------------------------------
 #--------------------------------------------------------------------------------------------
 #--------------------------------------------------------------------------------------------
+# Function to grant mailbox access permissions to a delegate
+# Usage: Grant-MailboxAccessLR -TargetMailbox "jdoe" -Delegate "msmith" -FullAccess
+# Example: Grant-MailboxAccessLR -TargetMailbox "jdoe" -Delegate "msmith" -SendAs
+# This function allows you to grant Full Access, Send As, or Send On Behalf permissions to a delegate for a specified mailbox.
+# Ensure you have the necessary permissions to run these commands in your Exchange environment.
+function Grant-MailboxAccessLR {
+    [CmdletBinding()]
+    param (
+        [string]$TargetMailbox,
+        [string]$Delegate,
+        [switch]$FullAccess,
+        [switch]$SendAs,
+        [switch]$SendOnBehalf
+    )
+
+    # Prompt if not provided
+    if (-not $TargetMailbox) {
+        $TargetMailbox = Read-Host "Enter the **user ID** of the target mailbox (e.g., jdoe)"
+    }
+
+    if (-not $Delegate) {
+        $Delegate = Read-Host "Enter the **user ID** of the delegate (e.g., msmith)"
+    }
+
+    # Ensure exactly one access switch is selected
+    $accessOptions = @($FullAccess, $SendAs, $SendOnBehalf) | Where-Object { $_ }
+    if ($accessOptions.Count -ne 1) {
+        Write-Error "Please specify exactly one permission switch: -FullAccess, -SendAs, or -SendOnBehalf."
+        return
+    }
+
+    if ($FullAccess) {
+        Add-MailboxPermission -Identity $TargetMailbox -User $Delegate -AccessRights FullAccess -InheritanceType All
+        Write-Host "✅ Granted FullAccess to '$Delegate' on mailbox '$TargetMailbox'"
+    }
+    elseif ($SendAs) {
+        Add-RecipientPermission -Identity $TargetMailbox -Trustee $Delegate -AccessRights SendAs
+        Write-Host "✅ Granted SendAs permission to '$Delegate' on mailbox '$TargetMailbox'"
+    }
+    elseif ($SendOnBehalf) {
+        Set-Mailbox -Identity $TargetMailbox -GrantSendOnBehalfTo @{Add = $Delegate}
+        Write-Host "✅ Granted SendOnBehalfTo permission to '$Delegate' on mailbox '$TargetMailbox'"
+    }
+}
 #--------------------------------------------------------------------------------------------
 
 <#.SYNOPSIS
