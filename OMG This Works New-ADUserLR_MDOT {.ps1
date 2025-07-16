@@ -177,10 +177,10 @@ function New-ADUserLR_MDOT {
 #--------------------------------------------------------------------------------------------
 <# 
 # Basic user creation only
-New-MDOTADUser -UserID "JDoe" -FirstName "John" -LastName "Doe" -Password "TempPass123!" -CreateBasicUser
+New-ADUserLR_MDOT -UserID "JDoe" -FirstName "John" -LastName "Doe" -Password "TempPass123!" -CreateBasicUser
 
 # Template-based user with all features
-New-MDOTADUser -UserID "EAllocca" `
+New-ADUserLR_MDOT -UserID "EAllocca" `
     -FirstName "Edward" `
     -LastName "Allocca" `
     -Password "MDOTSHAJune92025@" `
@@ -193,7 +193,7 @@ New-MDOTADUser -UserID "EAllocca" `
     -SetupExchange
 
 # Template user without Exchange
-New-MDOTADUser -UserID "TestUser" `
+New-ADUserLR_MDOT -UserID "TestUser" `
     -FirstName "Test" `
     -LastName "User" `
     -Password "TestPass123!" `
@@ -204,16 +204,16 @@ New-MDOTADUser -UserID "TestUser" `
 
 #>
 
-# Template-based user with all features
-New-MDOTADUser -UserID "JMoyer3" `
-    -FirstName "Joshua" `
-    -LastName "Moyer" `
-    -Password "MdotSH@July0325" `
-    -TemplateUser "OOM_TEMPLATE" `
-    -Phone "410-221-1635" `
-    -EmployeeID "C-14662" `
+<# Template-based user with all features
+New-ADUserLR_MDOT -UserID "OOshineye" `
+    -FirstName "Oluwakemi" `
+    -LastName "Oshineye" `
+    -Password "MdotSH@July1425" `
+    -TemplateUser "HHD_TEMPLATE" `
+    -EmployeeID "500766" `
     -UseTemplate `
     -CopyGroups `
     -CreateHomeDirectory 
-    -SetupExchange
+#> #Needs work -SetupExchange
+
 

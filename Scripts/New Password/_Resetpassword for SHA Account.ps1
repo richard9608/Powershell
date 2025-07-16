@@ -6,7 +6,7 @@ Enable-ADAccount -Identity "JGreer"
 #--------------------------------------------------------------------------------------------
 # Reset password for a specific user account
 $Username = "JGreer"
-$NewPassword = ConvertTo-SecureString "MdotSH@Jun1029" -AsPlainText -Force
+$NewPassword = ConvertTo-SecureString "MdotSH@July1425" -AsPlainText -Force
 Set-ADAccountPassword -Identity $Username -NewPassword $NewPassword -Reset
 Set-ADUser -Identity $Username -ChangePasswordAtLogon $true
 #--------------------------------------------------------------------------------------------
