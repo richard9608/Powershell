@@ -1,56 +1,39 @@
+Version 1
 
 function New-MDOTADUser {
     [CmdletBinding()]
     param (
-        [Parameter(Mandatory)]
+        [PSCustomObject]$csv,
         [string]$UserID,
-
-        [Parameter(Mandatory)]
-        [string]$FirstName,
-
-        [Parameter(Mandatory)]
-        [string]$LastName,
-
-        [Parameter(Mandatory)]
         [string]$Password,
-
-        [Parameter(Mandatory)]
-        [string]$TemplateUser,
-
-        [string]$Phone,
-
-        [string]$EmployeeID
+        [string]$TemplateUser
     )
-    
-    # Microsoft UPN @mdot.state.md.us          
-    $email = "$UserID@mdot.state.md.us"
-    
-    # Get Template User Info
-    $templateUserInfo = Get-ADUser $TemplateUser -Properties City, Company, Department, Description, Office, PostalCode, StreetAddress, State, HomeDirectory, MemberOf
 
-    # Derive OU Path from Template
+    $email = "$UserID@mdot.state.md.us"
+    $templateUserInfo = Get-ADUser $TemplateUser -Properties City, Company, Department, Description, Office, PostalCode, StreetAddress, State, HomeDirectory, MemberOf
     $path = ($templateUserInfo.DistinguishedName -replace '^.+?Template,(.+)$', '$1')
 
-    # Build parameters for New-ADUser
     $userParams = @{
-        Name                  = $UserID
-        SamAccountName        = $UserID
-        UserPrincipalName     = $email
-        GivenName             = $FirstName
-        Surname               = $LastName
-        DisplayName           = "$FirstName $LastName"
-        AccountPassword       = (ConvertTo-SecureString $Password -AsPlainText -Force)
+        Name = $UserID
+        SamAccountName = $UserID
+        UserPrincipalName = $email
+        GivenName = $csv.'Legal First Name'
+        Surname = $csv.'Legal Last Name'
+        DisplayName = "$($csv.'Legal First Name') $($csv.'Legal Last Name') (Consultant)"
+        AccountPassword = (ConvertTo-SecureString $Password -AsPlainText -Force)
         ChangePasswordAtLogon = $true
-        Enabled               = $true
-        Instance              = $templateUserInfo
-        Path                  = $path
+        Enabled = $true
+        Instance = $templateUserInfo
+        Path = $path
     }
 
-    if ($Phone) { $userParams['OfficePhone'] = $Phone }
-    if ($EmployeeID) { $userParams['EmployeeID'] = $EmployeeID }
+    if ($csv.'Office Phone') { $userParams['OfficePhone'] = $csv.'Office Phone' }
+    if ($csv.'C-Number') { $userParams['EmployeeID'] = $csv.'C-Number' }
 
-    # Create the AD user
+    # 
+
     New-ADUser @userParams -PassThru | Out-Null
+
 
     # Copy Group Memberships
     $groups = $templateUserInfo.MemberOf
@@ -105,18 +88,13 @@ function New-MDOTADUser {
         Write-Warning "Could not run getuser_Info2 for ${UserID}: $_"
     }
 }
-#--------------------------------------------------------------------------------------------
-#
- 
-    New-MDOTADUser -UserID EAllocca `
-        -FirstName Edward `
-        -LastName  Allocca `
-        -Password "MDOTSHAJune92025@" `
-        -TemplateUser "OED_TEMPLATE" `
-        -Phone "410-221-1635" `
-        -EmployeeID "500590"
-       
 
 
-     
+
+
+
+
+
+
+
 

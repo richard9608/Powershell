@@ -2,177 +2,652 @@
 #--------------------------------------------------------------------------------------------
 #--------------------------------------------------------------------------------------------
 #--------------------------------------------------------------------------------------------
-
-function groups {
-    param([Parameter(mandatory = $true)]
-        [string]$user)
-    Get-ADPrincipalGroupMembership -Identity $user | Sort-Object name | Select-Object -exp name
-}
-
-
 #--------------------------------------------------------------------------------------------
-function findaccount {
-    param([string]$user)
-    $DC = "mdotgbfrdc1.ad.mdot.mdstate",
-    "MAABWIDC1.maa.ad.mdot.mdstate",
-    "TSOGBDC1.mdothq.ad.mdot.mdstate",
-    "MDTAICCDC01.mdta.ad.mdot.mdstate",
-    "MPADMTENTDC01.mpa.ad.mdot.mdstate",
-    "MTACWDRDC1.mtant1.ad.mdot.mdstate",
-    "MVAWSDC1.mvant1.ad.mdot.mdstate",
-    "SHAGBDC1.shacadd.ad.mdot.mdstate"
-    $result = $DC | ForEach-Object { Get-ADUser -LDAPFilter "(samaccountname=$user*)" -Server $_ -Properties Department, Office, Description | Sort-Object SamAccountName | Select-Object Department, Enabled, SamAccountName, GivenName, SurName, Office, Description }
-    $result | Format-Table -AutoSize
-}
- 
-
-# --------------------------------------------------------------------
-
-function Add-SHARecord {
+#--------------------------------------------------------------------------------------------
+# Function to grant mailbox access permissions to a delegate
+# Usage: Grant-MailboxAccessLR -TargetMailbox "jdoe" -Delegate "msmith" -FullAccess
+# Example: Grant-MailboxAccessLR -TargetMailbox "jdoe" -Delegate "msmith" -SendAs
+# This function allows you to grant Full Access, Send As, or Send On Behalf permissions to a delegate for a specified mailbox.
+# Ensure you have the necessary permissions to run these commands in your Exchange environment.
+function Grant-MailboxAccessLR {
     [CmdletBinding()]
-    param ()
+    param (
+        [string]$TargetMailbox,
+        [string]$Delegate,
+        [switch]$FullAccess,
+        [switch]$SendAs,
+        [switch]$SendOnBehalf
+    )
 
-    # --- Fetch AD User Info ---
-    $userId = Read-Host "Enter UserID (sAMAccountName)"
-    $adUser = Get-ADUser -Identity $userId -Properties EmailAddress, GivenName, Surname, EmployeeID
-    if (-not $adUser) {
-        Write-Host "❌ User not found in AD." -ForegroundColor Red
+    # Prompt if not provided
+    if (-not $TargetMailbox) {
+        $TargetMailbox = Read-Host "Enter the **user ID** of the target mailbox (e.g., jdoe)"
+    }
+
+    if (-not $Delegate) {
+        $Delegate = Read-Host "Enter the **user ID** of the delegate (e.g., msmith)"
+    }
+
+    # Ensure exactly one access switch is selected
+    $accessOptions = @($FullAccess, $SendAs, $SendOnBehalf) | Where-Object { $_ }
+    if ($accessOptions.Count -ne 1) {
+        Write-Error "Please specify exactly one permission switch: -FullAccess, -SendAs, or -SendOnBehalf."
         return
     }
 
-    # --- Ask which records to add ---
-    Write-Host "`nWhich record(s) do you want to add? (Enter numbers separated by comma, e.g. 1,2)"
-    Write-Host "1. Adds"
-    Write-Host "2. FMT"
-    Write-Host "3. License"
-    $recordTypes = Read-Host "Selection"
-    $selected = $recordTypes -split "," | ForEach-Object { $_.Trim() }
+    if ($FullAccess) {
+        Add-MailboxPermission -Identity $TargetMailbox -User $Delegate -AccessRights FullAccess -InheritanceType All
+        Write-Host "✅ Granted FullAccess to '$Delegate' on mailbox '$TargetMailbox'"
+    }
+    elseif ($SendAs) {
+        Add-RecipientPermission -Identity $TargetMailbox -Trustee $Delegate -AccessRights SendAs
+        Write-Host "✅ Granted SendAs permission to '$Delegate' on mailbox '$TargetMailbox'"
+    }
+    elseif ($SendOnBehalf) {
+        Set-Mailbox -Identity $TargetMailbox -GrantSendOnBehalfTo @{Add = $Delegate}
+        Write-Host "✅ Granted SendOnBehalfTo permission to '$Delegate' on mailbox '$TargetMailbox'"
+    }
+}
+#--------------------------------------------------------------------------------------------
 
-    # --- Always collected fields (if needed for any selected sheet) ---
-    if ($selected -contains "1" -or $selected -contains "2") {
-        $ou = Read-Host "Which OU?"
-    }
-    if ($selected -contains "1" -or $selected -contains "3") {
-        $srNumber = Read-Host "SR#"
-    }
-    if ($selected -contains "3") {
-        $licenseType = Read-Host "Enter License Type (F3 or G3)"
-        $addedOrRemoved = Read-Host "Was the License Added or Removed?"
-        $creation = Read-Host "Is there a creation date? (yes/no)"
-        $creationDate = if ($creation -eq "yes") { (Get-Date).ToShortDateString() } else { "" }
-        $deletion = Read-Host "Is there a deletion date? (yes/no)"
-        $deletionDate = if ($deletion -eq "yes") { (Get-Date).ToShortDateString() } else { "" }
+<#.SYNOPSIS
+    This script provides various functions for managing user accounts, groups, and records in Active Directory.
+# .DESCRIPTION
+    The script includes functions to update user exit records, manage Active Directory groups, set folder permissions, and retrieve installed applications on remote computers.
+# .PARAMETER ByName
+    Use this switch to search for user accounts by first and last name.
+# .PARAMETER ByUser
+    Use this switch to search for user accounts by username.
+# .NOTES
+    Ensure that the necessary modules (ImportExcel, ActiveDirectory) are installed and available.
+# .LINK
+    https://example.com/Update-UserExitRecordsLR
+# .EXAMPLE
+    Update-UserExitRecordsLR
+    This command will prompt the user to select actions and enter required information to update user exit records.
+#>
+function Update-UserExitRecordsLR {
+    [CmdletBinding()]
+    param()
+
+    if (-not (Get-Module -ListAvailable -Name ImportExcel)) {
+        try { Import-Module ImportExcel -ErrorAction Stop }
+        catch {
+            Write-Host "❌ ImportExcel is not installed. Use: Install-Module ImportExcel"
+            return
+        }
     }
 
-    # --- Always reused fields ---
+    Write-Host "Select the action(s) you want to perform (comma-separated if multiple):"
+    Write-Host "1. Update Delete Sheet"
+    Write-Host "2. Update License Sheet"
+    Write-Host "3. Update Litigation Sheet"
+    $selection = Read-Host "Enter your selection (e.g., 1,2 or 2,3)"
+
+    $choices = $selection -split "," | ForEach-Object { $_.Trim() }
+
+    if ($choices.Count -eq 0) {
+        Write-Host "❌ No valid selection made."
+        return
+    }
+
+    $userId = Read-Host "Enter AD Username"
+    $adUser = Get-ADUser -Identity $userId -Properties EmailAddress, GivenName, Surname, EmployeeID
+
+    if (-not $adUser) {
+        Write-Host "❌ AD User not found." -ForegroundColor Red
+        return
+    }
+
     $email = $adUser.EmailAddress -replace '\.consultant'
     $first = $adUser.GivenName
     $last = $adUser.Surname
-    $ein = $adUser.EmployeeID
-    $workedBy = "LRichardson2"  # Always this value
+    $eid = $adUser.EmployeeID
+    $date = (Get-Date).ToShortDateString()
 
-    # --- Now generate and save each record as needed ---
-    if ($selected -contains "1") {
-        $add = [PSCustomObject]@{
+    $sr = if ($choices -contains "1" -or $choices -contains "2") { Read-Host "Enter SR#" } else { $null }
+    $workedBy = if ($choices -contains "1" -or $choices -contains "2" -or $choices -contains "3") { Read-Host "Worked By (UserID)" } else { $null }
+    $ou = if ($choices -contains "1") { Read-Host "Enter OU" } else { $null }
+
+    # License-specific prompts
+    if ($choices -contains "2") {
+        Write-Host "Select License Type:"
+        Write-Host "1. G5"
+        Write-Host "2. G3"
+        Write-Host "3. F3"
+        $ltChoice = Read-Host "Enter your selection (1-3)"
+        $licenseType = switch ($ltChoice) {
+            "1" { "G5" }
+            "2" { "G3" }
+            "3" { "F3" }
+            default { "Unknown" }
+        }
+
+        Write-Host "Was the License:"
+        Write-Host "1. Added"
+        Write-Host "2. Removed"
+        $licenseStatusChoice = Read-Host "Enter your selection (1 or 2)"
+        $licenseStatus = if ($licenseStatusChoice -eq "1") { "Added" } elseif ($licenseStatusChoice -eq "2") { "Removed" } else { "Unknown" }
+
+        $creationDate = if ($licenseStatus -eq "Added") { $date } else { "" }
+        $deletionDate = if ($licenseStatus -eq "Removed") { $date } else { "" }
+    }
+
+    # Litigation-specific prompt
+    if ($choices -contains "3") {
+        Write-Host "Select Litigation Option:"
+        Write-Host "1. Out of Office - Y - Hidden in GAL"
+        Write-Host "2. Out of Office - Proxy Rights until [date] - Y - Hidden in GAL"
+        Write-Host "3. Hidden in GAL"
+        Write-Host "4. Proxy Rights until [date]"
+        $litOption = Read-Host "Enter your selection (1-4)"
+
+        $litDesc = switch ($litOption) {
+            "1" { "Out of Office - Y - Hidden in GAL" }
+            "2" {
+                $proxyDate = Read-Host "Enter the date the proxy rights will expire (e.g. 08/30/2025)"
+                "Out of Office - Proxy Rights until $proxyDate - Y - Hidden in GAL"
+            }
+            "3" { "Hidden in GAL" }
+            "4" {
+                $proxyDate = Read-Host "Enter the date the proxy rights will expire (e.g. 08/30/2025)"
+                "Proxy Rights until $proxyDate"
+            }
+            default { "Unspecified" }
+        }
+    }
+
+    if ($choices -contains "1") {
+        $UserDeleteRecord = [PSCustomObject]@{
             email           = $email
             first_name      = $first
             last_name       = $last
-            group_name      = "SHA"
             OU              = $ou
-            'Creation Date' = (Get-Date).ToShortDateString()
-            'Notes'         = ""
-            'EIN?'          = $ein
-            'SR#'           = $srNumber
-            "Worked By"     = $workedBy
+            'Deletion Date' = $date
+            'EIN#'          = $eid
+            'SR#'           = $sr
+            'Worked By'     = $workedBy
         }
-        $addsPath = "\\shahqfs1\admshared\oit\TSD\Network\Document\Security Mentor\Current\Maryland_State_Trainee_Adds_2025.csv"
-        $add | Export-Csv -Path $addsPath -NoTypeInformation -Append
-        Write-Host "✅ 'Adds' record written."
+
+        $UserDeleteRecord | Export-Csv -Path "\\SHAHQFS1\ADMShared\OIT\TSD\Network\Document\Security Mentor\Current\Maryland_State_Trainee_Deletes_2025.csv" -Append -NoTypeInformation
+        Write-Host "✅ Delete record saved."
     }
 
-    if ($selected -contains "2") {
-        $fmt = [PSCustomObject]@{
-            email           = $email
-            first_name      = $first
-            last_name       = $last
-            group_name      = "SHA"
-            OU              = $ou
-            'Creation Date' = (Get-Date).ToShortDateString()
-            'Notes'         = ""
-            'EIN?'          = $ein
-        }
-        $fmtPath = "\\shahqfs1\admshared\oit\TSD\Network\Document\Security Mentor\Current\Maryland_State_FMT_Adds_2025.csv"
-        $fmt | Export-Csv -Path $fmtPath -NoTypeInformation -Append
-        Write-Host "✅ 'FMT' record written."
-    }
-
-    if ($selected -contains "3") {
-        $lic = [PSCustomObject]@{
+    if ($choices -contains "2") {
+        $UserLicenseRecord = [PSCustomObject]@{
             email                   = $email
             first_name              = $first
             last_name               = $last
             License_Type            = $licenseType
-            'SR#'                   = $srNumber
+            'SR#'                   = $sr
             Worked_By               = $workedBy
-            'License_Added/Removed' = $addedOrRemoved
+            'License_Added/Removed' = $licenseStatus
             Notes                   = ""
             Creation_Date           = $creationDate
             Deletion_Date           = $deletionDate
         }
-        # Write to CSV as before
-        $licCsvPath = "$HOME\Documents\LicenseInfo.csv"
-        $lic | Export-Csv -Path $licCsvPath -NoTypeInformation -Append
-        Write-Host "✅ 'License' record written to CSV."
 
-        # Write to Excel (worksheet SHA_Licenses, hardcoded path)
-        $pathToExcel = '\\shahqfs1\admshared\oit\TSD\Network\Document\Security Mentor\Current\SHA_Licenses.xlsx'
-        $worksheetName = 'SHA_Licenses'
-        $lic | Export-Excel -Path $pathToExcel -WorksheetName $worksheetName -Append
-        Write-Host "✅ 'License' record appended to Excel worksheet ($worksheetName)."
+        $csvPath = "$env:USERPROFILE\Documents\LicenseInfo.csv"
+        $excelPath = '\\shahqfs1\admshared\oit\TSD\Network\Document\Security Mentor\Current\SHA_Licenses.xlsx'
+
+        
+
+$success = $false
+$attempt = 0
+while (-not $success -and $attempt -lt 5) {
+    try {
+        $UserLicenseRecord | Export-Csv -Path $csvPath -Append -NoTypeInformation
+        $check = Import-Csv -Path $csvPath | Where-Object { $_.email -eq $UserLicenseRecord.email }
+        if ($check) {
+            Write-Host "✅ Record for $($UserLicenseRecord.email) successfully written to License CSV." -ForegroundColor Green
+        } else {
+            Write-Host "⚠️ Unable to confirm write to License CSV. Please verify manually." -ForegroundColor Yellow
+        }
+        $success = $true
+    } catch {
+        $attempt++
+        Write-Host "❌ Could not write to the License CSV (Attempt $attempt). File may be open. Retrying in 3 seconds..." -ForegroundColor Red
+        Start-Sleep -Seconds 3
     }
-
-    Write-Host "`nAll selected records have been processed."
 }
 
-# --------------------------------------------------------------------
+
+        $UserLicenseRecord | Export-Excel -Path $excelPath -WorksheetName 'SHA_Licenses' -Append
+        Write-Host "✅ License record saved."
+    }
+
+    if ($choices -contains "3") {
+        $UserLitigationRecord = [PSCustomObject]@{
+            email                              = $email
+            first_name                         = $first
+            last_name                          = $last
+            'Litigation Hold or Proxy Needed?' = $litDesc
+            'User Disabled Date'               = $date
+            'Worked by'                        = $workedBy
+        }
+
+        $litPath = "\\SHAHQFS1\ADMShared\OIT\TSD\Network\Document\Security Mentor\Current\Litigation_Hold.csv"
+        
+
+$success = $false
+$attempt = 0
+while (-not $success -and $attempt -lt 5) {
+    try {
+        $UserLitigationRecord | Export-Csv -Path $litPath -Append -NoTypeInformation
+        $check = Import-Csv -Path $litPath | Where-Object { $_.email -eq $UserLitigationRecord.email }
+        if ($check) {
+            Write-Host "✅ Record for $($UserLitigationRecord.email) successfully written to Litigation CSV." -ForegroundColor Green
+        } else {
+            Write-Host "⚠️ Unable to confirm write to Litigation CSV. Please verify manually." -ForegroundColor Yellow
+        }
+        $success = $true
+    } catch {
+        $attempt++
+        Write-Host "❌ Could not write to the Litigation CSV (Attempt $attempt). File may be open. Retrying in 3 seconds..." -ForegroundColor Red
+        Start-Sleep -Seconds 3
+    }
+}
 
 
+        Write-Host "✅ Litigation record saved."
+    }
 
-function Clear-ADExtensionAttribute1 {
+    Write-Host "`n🎯 Selected task(s) completed successfully." -ForegroundColor Green
+}
+
+
+#--------------------------------------------------------------------------------------------
+# Function to copy commands for port security and MAC address table checks
+# Usage: portsec -mac "00:11:22:33:44:55" -int "GigabitEthernet0/1"
+# Example: portsec -mac "00:11:22:33:44:55" -int "GigabitEthernet0/1"
+# This function copies commands to the clipboard for checking port security and MAC address table entries for a specific MAC address and interface.
+# It uses the `set-clipboard` cmdlet to copy the commands, which can then       
+# be pasted into a terminal or command line interface for execution.
+# Ensure you have the necessary permissions to run these commands on your network devices.  
+
+function portsec {
+param([string]$mac,[string]$int)
+"sh port-security address | i ($mac)
+sh mac address-table | i ($mac)
+sh port-security address | i ($int )
+sh mac address-table | i ($int )
+sh int $int status
+sh port-security int $int 
+"|set-clipboard
+Write-Host "Commands copied to clipboard for MAC: $mac and Interface: $int" -ForegroundColor Green
+}   
+
+
+#--------------------------------------------------------------------------------------------
+# Clean up any pre-existing conflicts introduced by VS Code extensions
+if ($host.Name -like '*Visual Studio*') {
+    Remove-TypeData -TypeName 'System.Security.AccessControl.ObjectSecurity' -ErrorAction SilentlyContinue
+    Start-Sleep -Milliseconds 500  # Allow shell integration to finish
+}
+
+Try {
+    Import-Module Microsoft.PowerShell.Security -ErrorAction Stop
+} Catch {
+    Write-Warning "Could not import Microsoft.PowerShell.Security: $($_.Exception.Message)"
+}
+
+#--------------------------------------------------------------------------------------------
+function acl3 {
     [CmdletBinding()]
     param (
-        [Parameter(Mandatory = $true, Position = 0)]
-        [string]$a
+        [Parameter(Mandatory)]
+        [string]$Path
     )
 
-    # Import the Active Directory module if it's not already loaded
-    if (-not (Get-Module -Name ActiveDirectory)) {
-        Import-Module ActiveDirectory
+    if (-not (Test-Path $Path)) {
+        Write-Error "Path not found: $Path"
+        return
     }
 
     try {
-        # Retrieve the user object
-        $User = Get-ADUser -Identity $a -ErrorAction Stop
-
-        # Clear ExtensionAttribute1
-        Set-ADUser -Identity $User -Clear ExtensionAttribute1
-
-        Write-Host "ExtensionAttribute1 successfully cleared for $a."
-    }
-    catch {
-        Write-Host "Error: $_"
+        Get-Acl -Path $Path | 
+        Select-Object @{ 
+            Name = "Path"; 
+            Expression = {
+                ($_).Path -replace '.*::', ''
+            }
+        }, Access | 
+        Select-Object -ExpandProperty Access |
+        Format-Table FileSystemRights, IsInherited, IdentityReference -GroupBy Path
+    } catch {
+        Write-Error "Failed to retrieve ACL: $_"
     }
 }
 
 #--------------------------------------------------------------------------------------------
-#Get applications installed on a remote computer that are not Microsoft applications
-# This function retrieves a list of installed applications on a remote computer, excluding Microsoft applications.
-function getapps2 {
-    param([Parameter(mandatory = $true)]
-        [string]$ComputerName)
-    Invoke-Command $ComputerName { get-package -providername programs |
-            Sort-Object name | Where-Object name -notmatch "Microsoft.+" | Select-Object Version, Name } |
-            Format-Table Version, Name, PSComputerName -AutoSize
+
+function finduserLR2 {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true, Position = 0, ValueFromPipeline = $true)]
+        [string]$username
+    )
+
+    process {
+        Get-ADUser -Identity $username `
+                   -Properties Name,EmployeeID,Description,homeDirectory,DisplayName,Enabled,LockedOut,AccountExpirationDate |
+        Select-Object Name, EmployeeID, Description, homeDirectory, DisplayName, Enabled, LockedOut, AccountExpirationDate
+    }
+}
+#--------------------------------------------------------------------------------------------
+<#
+.SYNOPSIS
+    Find-MDOTAccount is valid' for finding MDOT accounts by name or username.
+.PARAMETER ByName
+    Use this switch to search by first and last name.
+.PARAMETER ByUser
+    Use this switch to search by username.                  
+.DESCRIPTION
+    This function searches for MDOT accounts in Active Directory.
+.NOTES
+    This function is not supported in Linux.
+.LINK
+    https://example.com/Find-MDOTAccount
+.EXAMPLE
+    Find-MDOTAccount -ByName "John" "Doe"
+    This command searches for MDOT accounts with the first name "John" and last name "Doe". 
+#>
+
+function Find-MDOTAccountLR2 {
+    [CmdletBinding()]
+    param (
+        [switch]$ByName,
+        [switch]$ByUser,
+        [Parameter(ValueFromRemainingArguments = $true)]
+        [string[]]$Args
+    )
+
+    if ($ByName) {
+        if ($Args.Count -lt 2) {
+            Write-Host "Usage: Find-MDOTAccount -ByName FirstName LastName"
+            return
+        }
+        $firstname = $Args[0].Trim()
+        $lastname = $Args[1].Trim()
+        $LDAP = "(&(givenname=$firstname*)(sn=$lastname*))"
+    }
+    elseif ($ByUser) {
+        if ($Args.Count -lt 1) {
+            Write-Host "Usage: Find-MDOTAccount -ByUser UserName"
+            return
+        }
+        $user = $Args[0].Trim()
+        $LDAP = "(samaccountname=$user*)"
+    }
+    else {
+        Write-Host "You must specify either -ByName or -ByUser"
+        return
+    }
+
+    $DC = @(
+        "mdotgbfrdc1.ad.mdot.mdstate",
+        "MAABWIDC1.maa.ad.mdot.mdstate",
+        "TSOGBDC1.mdothq.ad.mdot.mdstate",
+        "MDTAICCDC01.mdta.ad.mdot.mdstate",
+        "MPADMTENTDC01.mpa.ad.mdot.mdstate",
+        "MTACWDRDC1.mtant1.ad.mdot.mdstate",
+        "MVAWSDC1.mvant1.ad.mdot.mdstate",
+        "SHAGBDC1.shacadd.ad.mdot.mdstate"
+    )
+
+    $result = $DC | ForEach-Object {
+        Get-ADUser -LDAPFilter $LDAP -Server $_ `
+            -Properties Department, Office, Description, EmployeeID, Enabled, GivenName, Surname, SamAccountName |
+            Sort-Object SamAccountName |
+            Select-Object Department, Enabled, SamAccountName, GivenName, Surname, EmployeeID, Office, Description
+        }
+
+        $count = $result.Count
+        Write-Host "`nNumber of results found: $count`n" -ForegroundColor Yellow
+
+        $result | Format-Table -AutoSize
+    }
+
+    #--------------------------------------------------------------------------------------------
+    #.Help
+    <# 
+.SYNOPSIS
+    Sets the specified permission for a user on a folder.
+
+.DESCRIPTION
+    This function modifies the Access Control List (ACL) of a folder to grant the specified permission to a user.
+
+.PARAMETER FolderPath
+    The path to the folder on which to set the permission.
+
+.PARAMETER User
+    The username or user account to which the permission will be granted.
+
+.PARAMETER Permission
+    The level of permission to grant. Valid values are: FullControl, Modify, ReadAndExecute, Read, Write.
+
+.EXAMPLE
+    Set-FolderPermission -FolderPath "C:\SharedFolder" -User "DOMAIN\User" -Permission "Read"
+
+.NOTES
+    Author: Your Name
+    Date: Today's Date
+#>
+    function Set-FolderPermission {
+        param (
+            [Parameter(Mandatory)]
+            [string]$FolderPath,
+
+            [Parameter(Mandatory)]
+            [string]$User,
+
+            [Parameter(Mandatory)]
+            [ValidateSet("FullControl", "Modify", "ReadAndExecute", "Read", "Write")]
+            [string]$Permission
+        )
+
+        if (-Not (Test-Path -Path $FolderPath)) {
+            Write-Error "Folder path does not exist: $FolderPath"
+            return
+        }
+
+        $inheritanceFlags = [System.Security.AccessControl.InheritanceFlags]::ContainerInherit, [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
+        $propagationFlags = [System.Security.AccessControl.PropagationFlags]::None
+
+        $accessRule = New-Object System.Security.AccessControl.FileSystemAccessRule(
+            $User,
+            $Permission,
+            $inheritanceFlags,
+            $propagationFlags,
+            [System.Security.AccessControl.AccessControlType]::Allow
+        )
+
+        $acl = Get-Acl -Path $FolderPath
+        $acl.SetAccessRule($accessRule)
+
+        try {
+            Set-Acl -Path $FolderPath -AclObject $acl
+            Write-Host "✅ $Permission permission set for $User on $FolderPath"
+        }
+        catch {
+            Write-Error "Failed to set ACL: $_"
+        }
+    }
+
+
+
+    #--------------------------------------------------------------------------------------------
+
+    function groups {
+        param([Parameter(mandatory = $true)]
+            [string]$user)
+        Get-ADPrincipalGroupMembership -Identity $user | Sort-Object name | Select-Object -exp name
+    }
+
+
+    #--------------------------------------------------------------------------------------------
+    function findaccount {
+        param([string]$user)
+        $DC = "mdotgbfrdc1.ad.mdot.mdstate",
+        "MAABWIDC1.maa.ad.mdot.mdstate",
+        "TSOGBDC1.mdothq.ad.mdot.mdstate",
+        "MDTAICCDC01.mdta.ad.mdot.mdstate",
+        "MPADMTENTDC01.mpa.ad.mdot.mdstate",
+        "MTACWDRDC1.mtant1.ad.mdot.mdstate",
+        "MVAWSDC1.mvant1.ad.mdot.mdstate",
+        "SHAGBDC1.shacadd.ad.mdot.mdstate"
+        $result = $DC | ForEach-Object { Get-ADUser -LDAPFilter "(samaccountname=$user*)" -Server $_ -Properties Department, Office, Description | Sort-Object SamAccountName | Select-Object Department, Enabled, SamAccountName, GivenName, SurName, Office, Description }
+        $result | Format-Table -AutoSize
+    }
+ 
+
+    # --------------------------------------------------------------------
+
+    function Add-SHARecord {
+        [CmdletBinding()]
+        param ()
+
+        # --- Fetch AD User Info ---
+        $userId = Read-Host "Enter UserID (sAMAccountName)"
+        $adUser = Get-ADUser -Identity $userId -Properties EmailAddress, GivenName, Surname, EmployeeID
+        if (-not $adUser) {
+            Write-Host "❌ User not found in AD." -ForegroundColor Red
+            return
+        }
+
+        # --- Ask which records to add ---
+        Write-Host "`nWhich record(s) do you want to add? (Enter numbers separated by comma, e.g. 1,2)"
+        Write-Host "1. Adds"
+        Write-Host "2. FMT"
+        Write-Host "3. License"
+        $recordTypes = Read-Host "Selection"
+        $selected = $recordTypes -split "," | ForEach-Object { $_.Trim() }
+
+        # --- Always collected fields (if needed for any selected sheet) ---
+        if ($selected -contains "1" -or $selected -contains "2") {
+            $ou = Read-Host "Which OU?"
+        }
+        if ($selected -contains "1" -or $selected -contains "3") {
+            $srNumber = Read-Host "SR#"
+        }
+        if ($selected -contains "3") {
+            $licenseType = Read-Host "Enter License Type (F3 or G3)"
+            $addedOrRemoved = Read-Host "Was the License Added or Removed?"
+            $creation = Read-Host "Is there a creation date? (yes/no)"
+            $creationDate = if ($creation -eq "yes") { (Get-Date).ToShortDateString() } else { "" }
+            $deletion = Read-Host "Is there a deletion date? (yes/no)"
+            $deletionDate = if ($deletion -eq "yes") { (Get-Date).ToShortDateString() } else { "" }
+        }
+
+        # --- Always reused fields ---
+        $email = $adUser.EmailAddress -replace '\.consultant'
+        $first = $adUser.GivenName
+        $last = $adUser.Surname
+        $ein = $adUser.EmployeeID
+        $workedBy = "LRichardson2"  # Always this value
+
+        # --- Now generate and save each record as needed ---
+        if ($selected -contains "1") {
+            $add = [PSCustomObject]@{
+                email           = $email
+                first_name      = $first
+                last_name       = $last
+                group_name      = "SHA"
+                OU              = $ou
+                'Creation Date' = (Get-Date).ToShortDateString()
+                'Notes'         = ""
+                'EIN?'          = $ein
+                'SR#'           = $srNumber
+                "Worked By"     = $workedBy
+            }
+            $addsPath = "\\shahqfs1\admshared\oit\TSD\Network\Document\Security Mentor\Current\Maryland_State_Trainee_Adds_2025.csv"
+            $add | Export-Csv -Path $addsPath -NoTypeInformation -Append
+            Write-Host "✅ 'Adds' record written."
+        }
+
+        if ($selected -contains "2") {
+            $fmt = [PSCustomObject]@{
+                email           = $email
+                first_name      = $first
+                last_name       = $last
+                group_name      = "SHA"
+                OU              = $ou
+                'Creation Date' = (Get-Date).ToShortDateString()
+                'Notes'         = ""
+                'EIN?'          = $ein
+            }
+            $fmtPath = "\\shahqfs1\admshared\oit\TSD\Network\Document\Security Mentor\Current\Maryland_State_FMT_Adds_2025.csv"
+            $fmt | Export-Csv -Path $fmtPath -NoTypeInformation -Append
+            Write-Host "✅ 'FMT' record written."
+        }
+
+        if ($selected -contains "3") {
+            $lic = [PSCustomObject]@{
+                email                   = $email
+                first_name              = $first
+                last_name               = $last
+                License_Type            = $licenseType
+                'SR#'                   = $srNumber
+                Worked_By               = $workedBy
+                'License_Added/Removed' = $addedOrRemoved
+                Notes                   = ""
+                Creation_Date           = $creationDate
+                Deletion_Date           = $deletionDate
+            }
+            # Write to CSV as before
+            $licCsvPath = "$HOME\Documents\LicenseInfo.csv"
+            $lic | Export-Csv -Path $licCsvPath -NoTypeInformation -Append
+            Write-Host "✅ 'License' record written to CSV."
+
+            # Write to Excel (worksheet SHA_Licenses, hardcoded path)
+            $pathToExcel = '\\shahqfs1\admshared\oit\TSD\Network\Document\Security Mentor\Current\SHA_Licenses.xlsx'
+            $worksheetName = 'SHA_Licenses'
+            $lic | Export-Excel -Path $pathToExcel -WorksheetName $worksheetName -Append
+            Write-Host "✅ 'License' record appended to Excel worksheet ($worksheetName)."
+        }
+
+        Write-Host "`nAll selected records have been processed."
+    }
+
+    # --------------------------------------------------------------------
+
+
+
+    function Clear-ADExtensionAttribute1 {
+        [CmdletBinding()]
+        param (
+            [Parameter(Mandatory = $true, Position = 0)]
+            [string]$a
+        )
+
+        # Import the Active Directory module if it's not already loaded
+        if (-not (Get-Module -Name ActiveDirectory)) {
+            Import-Module ActiveDirectory
+        }
+
+        try {
+            # Retrieve the user object
+            $User = Get-ADUser -Identity $a -ErrorAction Stop
+
+            # Clear ExtensionAttribute1
+            Set-ADUser -Identity $User -Clear ExtensionAttribute1
+
+            Write-Host "ExtensionAttribute1 successfully cleared for $a."
+        }
+        catch {
+            Write-Host "Error: $_"
+        }
+    }
+
+    #--------------------------------------------------------------------------------------------
+    #Get applications installed on a remote computer that are not Microsoft applications
+    # This function retrieves a list of installed applications on a remote computer, excluding Microsoft applications.
+    function getapps2 {
+        param([Parameter(mandatory = $true)]
+            [string]$ComputerName)
+        Invoke-Command $ComputerName { get-package -providername programs |
+                Sort-Object name | Where-Object name -notmatch "Microsoft.+" | Select-Object Version, Name } |
+                Format-Table Version, Name, PSComputerName -AutoSize
 }
 #--------------------------------------------------------------------------------------------
 #Get applications installed on a remote computer that are Microsoft applications
@@ -2117,8 +2592,13 @@ function Update-ADuserAttributes {
 
 function acl1 {
     param([string]$a)
-    get-acl $a | Select-Object @{l = "path"; e = { $([string]$b = $_.path; $b = $b -replace '.+::', "";
-                $b) }
+    get-acl $a | Select-Object @{
+        l = "path"
+        e = {
+            $b = [string]$_.path
+            $b = $b -replace '.+::', ""
+            $b
+        }
     } -ExpandProperty access | Format-Table filesystemrights, isinherited, identityreference -GroupBy path
 }
 #--------------------------------------------------------------------------------------------
@@ -2129,11 +2609,7 @@ function acl2 {
     }, owner -ExpandProperty access | Format-Table owner, filesystemrights, isinherited, identityreference -GroupBy path
 }
 #--------------------------------------------------------------------------------------------
-function finduser {
-    param([string]$a)
-    Get-ADUser -LDAPFilter "(name=$a*)" -Properties * | Format-List displayname, name, employeeid
-}
-#--------------------------------------------------------------------------------------------
+
 function newuser {
     param([string]$a)
     @"
@@ -2144,6 +2620,7 @@ Email:`t`t`t`t$((Get-ADUser $a -Properties *).emailaddress)
 Microsoft Sign-in:`t`t$((Get-ADUser $a -Properties *).userprincipalname)
 "@
 }
+
 #--------------------------------------------------------------------------------------------
 #Hide User In GAL
 
@@ -3541,4 +4018,4 @@ function New-MDOTSHAPasswordLR {
     # Combine and output
     "$Prefix$($datePart)$Suffix"
 }
-
+#--------------------------------------------------------------------------------------------

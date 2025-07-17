@@ -1,3 +1,39 @@
+# This PowerShell script defines a function to add properties to each row of a CSV file.
+# Add-CsvProperties with New-MDOTADUser
+
+
+function Add-CsvProperties {
+    param (
+        [Parameter(Mandatory=$true)]
+        [string]$CsvPath,
+        [Parameter(Mandatory=$true)]
+        [string]$UserID,
+        [Parameter(Mandatory=$true)]
+        [string]$Password,
+        [Parameter(Mandatory=$true)]
+        [string]$Template
+    )
+
+    $csv = Import-Csv $CsvPath
+    foreach ($row in $csv) {
+        Add-Member -InputObject $row -MemberType NoteProperty -Name UserID -Value $UserID -Force
+        Add-Member -InputObject $row -MemberType NoteProperty -Name Password -Value $Password -Force
+        $row.'AD Template to Use' = $Template
+    }
+
+    return $csv
+}
+
+# Usage Example
+$CsvPath = Read-Host "Enter path to CSV file"
+$UserID = Read-Host "Enter UserID"
+$Password = Read-Host "Enter Password"
+$Template = Read-Host "Enter AD Template to Use"
+
+$csv = Add-CsvProperties -CsvPath $CsvPath -UserID $UserID -Password $Password -Template $Template
+
+#--------------------------------------------------------------------------------------------
+# Function to create a new AD user based on a template user
 
 function New-MDOTADUser {
     [CmdletBinding()]
@@ -35,11 +71,12 @@ function New-MDOTADUser {
     $userParams = @{
         Name                  = $UserID
         SamAccountName        = $UserID
-        UserPrincipalName     = $email
-        GivenName             = $FirstName
-        Surname               = $LastName
-        DisplayName           = "$FirstName $LastName"
         AccountPassword       = (ConvertTo-SecureString $Password -AsPlainText -Force)
+        ChangePasswordAtLogon = $true
+        UserPrincipalName     = $email
+        GivenName             = $csv.'Legal First Name' 
+        Surname               = $csv.'Legal Last Name'
+        DisplayName           = "$FirstName $LastName"
         ChangePasswordAtLogon = $true
         Enabled               = $true
         Instance              = $templateUserInfo
@@ -119,4 +156,5 @@ function New-MDOTADUser {
 
 
      
+
 
