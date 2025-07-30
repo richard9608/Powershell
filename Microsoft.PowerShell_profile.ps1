@@ -4,6 +4,332 @@
 #--------------------------------------------------------------------------------------------
 #--------------------------------------------------------------------------------------------
 #--------------------------------------------------------------------------------------------
+#--------------------------------------------------------------------------------------------
+
+# New-ADGroup
+<#
+.SYNOPSIS
+    Creates a new Active Directory group with specified properties.
+
+.DESCRIPTION
+    This function wraps the New-ADGroup cmdlet to create a new AD group with the given name, description, path, scope, and category.
+
+.PARAMETER Name
+    The name of the new Active Directory group.
+        [string]$Path,
+
+        [Parameter(Mandatory = $false)]
+        [ValidateSet('DomainLocal', 'Global', 'Universal')]
+        [string]$GroupScope = 'Global',
+
+        [Parameter(Mandatory = $false)]
+        [ValidateSet('Security', 'Distribution')]
+        [string]$GroupCategory = 'Security'
+    )
+    The distinguished name (DN) of the container or organizational unit (OU) where the group will be created.
+
+.PARAMETER GroupScope
+    The scope of the group (e.g., Global, Universal, DomainLocal). Default is 'Global'.
+
+.PARAMETER GroupCategory
+    The category of the group (e.g., Security, Distribution). Default is 'Security'.
+
+.EXAMPLE
+    New-ADGroupLR -Name "MyGroup" -Description "Test group" -Path "OU=Groups,DC=domain,DC=com"
+
+#>
+function New-ADGroupLR {
+    param (
+        [Parameter(Mandatory = $true)]
+        [string]$Name,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Description,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Path,
+
+        [string]$GroupScope = 'Global',
+        [string]$GroupCategory = 'Security'
+    )
+    
+    New-ADGroup -Name $Name `
+    -DisplayName $Name `
+    -GroupScope $GroupScope `
+    -GroupCategory $GroupCategory `
+    -Description $Description `
+    -Path $Path -Verbose
+}
+
+#--------------------------------------------------------------------------------------------
+# Set-OOOLR.ps1
+# Set Out of Office (OOO) for a user in Exchange Online
+# This script sets the Out of Office (OOO) auto-reply configuration for a specified user.
+# It allows you to specify the start and end time for the OOO message, as well as the internal and external messages.
+# Ensure you have the Exchange Online PowerShell module installed and connected to your Exchange Online environment.
+Function Set-OOOLR {
+    [CmdletBinding()]
+    param ()
+
+    $UserEmail = Read-Host "Enter user's username (email or alias)"
+    
+    # Start time = Now
+    $Start = Get-Date
+
+    # Ask for end time
+    $End = Read-Host "Enter OOO end date/time (e.g., 07/29/2025 12:00AM)"
+    $Message = Read-Host "Enter OOO message (used for both internal and external)"
+
+    Set-MailboxAutoReplyConfiguration -Identity $UserEmail `
+        -AutoReplyState Scheduled  `
+        -StartTime $Start `
+        -EndTime (Get-Date $End) `
+        -InternalMessage $Message `
+        -ExternalMessage $Message
+}
+
+
+#--------------------------------------------------------------------------------------------
+# Function to clear consultant attributes and remove "(Consultant)" from DisplayName
+# Usage: Clear-ConsultantAttributesLR -UserName "jdoe" -ClearADUserExpiration
+# Example: Clear-ConsultantAttributesLR -UserName "jdoe" -ClearADUserExpiration
+Function Clear-ConsultantAttributesLR {
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$UserName,
+        [switch]$ClearADUserExpiration
+    )
+
+    # Clear extensionAttribute1
+    Set-ADUser -Identity $UserName -Clear @("extensionAttribute1")
+
+    # Remove "(Consultant)" from DisplayName
+    $displayName = (Get-ADUser -Identity $UserName -Properties DisplayName).DisplayName
+    $newDisplayName = $displayName -replace '\(Consultant\)', ''
+    Set-ADUser -Identity $UserName -DisplayName $newDisplayName.Trim()
+
+    # Clear account expiration if switch is set
+    if ($ClearADUserExpiration) {
+        Set-ADUser -Identity $UserName -AccountExpirationDate $null
+    }
+}
+
+#--------------------------------------------------------------------------------------------
+function New-ADUserLR_MDOT {
+    [CmdletBinding()]
+    param (
+        [Parameter(Mandatory)]
+        [string]$UserID,
+
+        [Parameter(Mandatory)]
+        [string]$FirstName,
+
+        [Parameter(Mandatory)]
+        [string]$LastName,
+
+        [Parameter(Mandatory)]
+        [string]$Password,
+
+        [string]$TemplateUser,
+
+        [string]$Phone,
+
+        [string]$EmployeeID,
+
+        # Switch parameters to control functionality
+        [switch]$CreateBasicUser,
+        [switch]$UseTemplate,
+        [switch]$SetupExchange,
+        [switch]$CreateHomeDirectory,
+        [switch]$CopyGroups
+    )
+    
+    # Microsoft UPN @mdot.state.md.us          
+    $email = "$UserID@mdot.state.md.us"
+
+    #--------------------------------------------------------------------------------------------
+    # BASIC USER CREATION
+    #--------------------------------------------------------------------------------------------
+    if ($CreateBasicUser) {
+        Write-Host "Creating basic AD user..." -ForegroundColor Green
+        
+        $userParams = @{
+            Name                  = $UserID
+            SamAccountName        = $UserID
+            UserPrincipalName     = $email
+            GivenName             = $FirstName
+            Surname               = $LastName
+            DisplayName           = "$FirstName $LastName"
+            AccountPassword       = (ConvertTo-SecureString $Password -AsPlainText -Force)
+            ChangePasswordAtLogon = $true
+            Enabled               = $true
+        }
+
+        # Add optional parameters
+        if ($Phone) { $userParams['OfficePhone'] = $Phone }
+        if ($EmployeeID) { $userParams['EmployeeID'] = $EmployeeID }
+
+        # Create the basic AD user
+        New-ADUser @userParams -PassThru | Out-Null
+        Write-Host "Basic user $UserID created successfully." -ForegroundColor Green
+    }
+
+    #--------------------------------------------------------------------------------------------
+    # TEMPLATE-BASED USER CREATION
+    #--------------------------------------------------------------------------------------------
+    if ($UseTemplate) {
+        if (-not $TemplateUser) {
+            Write-Error "TemplateUser parameter is required when using -UseTemplate switch"
+            return
+        }
+
+        Write-Host "Creating user from template: $TemplateUser" -ForegroundColor Yellow
+        
+        # Get Template User Info
+        $templateUserInfo = Get-ADUser $TemplateUser -Properties City, Company, Department, Description, Office, PostalCode, StreetAddress, State, HomeDirectory, MemberOf
+
+        # Derive OU Path from Template
+        $path = ($templateUserInfo.DistinguishedName -replace '^.+?Template,(.+)$', '$1')
+
+        # Build parameters for New-ADUser with template
+        $userParams = @{
+            Name                  = $UserID
+            SamAccountName        = $UserID
+            UserPrincipalName     = $email
+            GivenName             = $FirstName
+            Surname               = $LastName
+            DisplayName           = "$FirstName $LastName"
+            AccountPassword       = (ConvertTo-SecureString $Password -AsPlainText -Force)
+            ChangePasswordAtLogon = $true
+            Enabled               = $true
+            Instance              = $templateUserInfo
+            Path                  = $path
+        }
+
+        # Add optional parameters
+        if ($Phone) { $userParams['OfficePhone'] = $Phone }
+        if ($EmployeeID) { $userParams['EmployeeID'] = $EmployeeID }
+
+        # Create the AD user with template
+        New-ADUser @userParams -PassThru | Out-Null
+        Write-Host "Template-based user $UserID created successfully." -ForegroundColor Green
+
+        # Copy Group Memberships if requested
+        if ($CopyGroups) {
+            Write-Host "Copying group memberships from template..." -ForegroundColor Yellow
+            $groups = $templateUserInfo.MemberOf
+            if ($groups) {
+                Add-ADPrincipalGroupMembership -Identity $UserID -MemberOf $groups -Verbose
+                Write-Host "Group memberships copied successfully." -ForegroundColor Green
+            }
+            else {
+                Write-Host "No groups found for template user $TemplateUser." -ForegroundColor Yellow
+            }
+        }
+
+        # Create Home Directory if requested
+        if ($CreateHomeDirectory) {
+            Write-Host "Setting up home directory..." -ForegroundColor Yellow
+            if ($templateUserInfo.HomeDirectory) {
+                $homeRoot = ($templateUserInfo.HomeDirectory -replace '\\[^\\]+$', '')
+                $newHomeDir = "$homeRoot\$UserID"
+
+                if (-not (Test-Path $newHomeDir)) {
+                    New-Item -Path $newHomeDir -ItemType Directory | Out-Null
+                    Write-Host "Created home directory: $newHomeDir" -ForegroundColor Green
+                }
+
+                Set-ADUser $UserID -HomeDirectory $newHomeDir -HomeDrive 'M:' -Verbose
+                Write-Host "Home directory configured successfully." -ForegroundColor Green
+            }
+            else {
+                Write-Host "Template user has no home directory configured." -ForegroundColor Yellow
+            }
+        }
+    }
+
+    #--------------------------------------------------------------------------------------------
+    # EXCHANGE SETUP
+    #--------------------------------------------------------------------------------------------
+    if ($SetupExchange) {
+        Write-Host "Setting up Exchange mailbox..." -ForegroundColor Yellow
+        
+        try {
+            $Session = New-PSSession -ConfigurationName Microsoft.Exchange -ConnectionUri http://mdotgbexch2/powershell -Authentication Kerberos
+            Import-PSSession $Session -DisableNameChecking      
+            Set-ADServerSettings -ViewEntireForest $true
+            
+            # Enable the mailbox for the new user
+            Enable-RemoteMailbox $UserID -RemoteRoutingAddress "$UserID@mdot.state.md.us"
+            
+            # Enable the archive mailbox for the new user
+            Get-RemoteMailbox $UserID | Enable-Mailbox -Archive 
+            
+            Write-Host "Exchange mailbox configured successfully." -ForegroundColor Green
+        }
+        catch {
+            Write-Warning "Failed to configure Exchange mailbox: $($_.Exception.Message)"
+        }
+        finally {
+            # Clean up Exchange session to avoid session leaks
+            if ($Session) {
+                Remove-PSSession $Session
+            }
+        }
+    }
+
+    # Display final user information
+    Write-Host "`nUser creation completed!" -ForegroundColor Green
+    Write-Host "UserID: $UserID" -ForegroundColor Cyan
+    Write-Host "Email: $email" -ForegroundColor Cyan
+    Write-Host "Display Name: $FirstName $LastName" -ForegroundColor Cyan    
+}
+# EXAMPLE USAGE WITH DIFFERENT SWITCHES
+#--------------------------------------------------------------------------------------------
+<# 
+# Basic user creation only
+New-ADUserLR_MDOT -UserID "JDoe" -FirstName "John" -LastName "Doe" -Password "TempPass123!" -CreateBasicUser
+
+# Template-based user with all features
+New-ADUserLR_MDOT -UserID "EAllocca" `
+    -FirstName "Edward" `
+    -LastName "Allocca" `
+    -Password "MDOTSHAJune92025@" `
+    -TemplateUser "OED_TEMPLATE" `
+    -Phone "410-221-1635" `
+    -EmployeeID "500590" `
+    -UseTemplate `
+    -CopyGroups `
+    -CreateHomeDirectory `
+    -SetupExchange
+
+# Template user without Exchange
+New-ADUserLR_MDOT -UserID "TestUser" `
+    -FirstName "Test" `
+    -LastName "User" `
+    -Password "TestPass123!" `
+    -TemplateUser "OED_TEMPLATE" `
+    -UseTemplate `
+    -CopyGroups `
+    -CreateHomeDirectory
+
+#>
+
+<# Template-based user with all features
+New-ADUserLR_MDOT -UserID "OOshineye" `
+    -FirstName "Oluwakemi" `
+    -LastName "Oshineye" `
+    -Password "MdotSH@July1425" `
+    -TemplateUser "HHD_TEMPLATE" `
+    -EmployeeID "500766" `
+    -UseTemplate `
+    -CopyGroups `
+    -CreateHomeDirectory 
+#> #Needs work -SetupExchange
+
+
+
+#--------------------------------------------------------------------------------------------
 # Function to grant mailbox access permissions to a delegate
 # Usage: Grant-MailboxAccessLR -TargetMailbox "jdoe" -Delegate "msmith" -FullAccess
 # Example: Grant-MailboxAccessLR -TargetMailbox "jdoe" -Delegate "msmith" -SendAs
@@ -409,72 +735,62 @@ function Find-MDOTAccountLR2 {
     }
 
     #--------------------------------------------------------------------------------------------
-    #.Help
-    <# 
-.SYNOPSIS
-    Sets the specified permission for a user on a folder.
+    #Set-FolderPermissionLR 
+    # This PowerShell function sets folder permissions for a specified user with a menu-driven selection of permission levels.
+    # Usage: Set-FolderPermissionLR -FolderPath "C:\Path\To\Folder" -User "DOMAIN\User"
+function Set-FolderPermissionLR {
+    [CmdletBinding()]
+    param (
+        [Parameter(Mandatory)]
+        [string]$FolderPath,
 
-.DESCRIPTION
-    This function modifies the Access Control List (ACL) of a folder to grant the specified permission to a user.
+        [Parameter(Mandatory)]
+        [string]$User
+    )
 
-.PARAMETER FolderPath
-    The path to the folder on which to set the permission.
+    # Prompt with permission menu
+    Write-Host "Select a permission level:`n1. FullControl`n2. Modify`n3. ReadAndExecute`n4. Read`n5. Write" -ForegroundColor Cyan
+    $selection = Read-Host "Enter the number corresponding to the permission (1-5)"
 
-.PARAMETER User
-    The username or user account to which the permission will be granted.
-
-.PARAMETER Permission
-    The level of permission to grant. Valid values are: FullControl, Modify, ReadAndExecute, Read, Write.
-
-.EXAMPLE
-    Set-FolderPermission -FolderPath "C:\SharedFolder" -User "DOMAIN\User" -Permission "Read"
-
-.NOTES
-    Author: Your Name
-    Date: Today's Date
-#>
-    function Set-FolderPermission {
-        param (
-            [Parameter(Mandatory)]
-            [string]$FolderPath,
-
-            [Parameter(Mandatory)]
-            [string]$User,
-
-            [Parameter(Mandatory)]
-            [ValidateSet("FullControl", "Modify", "ReadAndExecute", "Read", "Write")]
-            [string]$Permission
-        )
-
-        if (-Not (Test-Path -Path $FolderPath)) {
-            Write-Error "Folder path does not exist: $FolderPath"
+    # Map number to permission
+    switch ($selection) {
+        "1" { $Permission = "FullControl" }
+        "2" { $Permission = "Modify" }
+        "3" { $Permission = "ReadAndExecute" }
+        "4" { $Permission = "Read" }
+        "5" { $Permission = "Write" }
+        default {
+            Write-Error "❌ Invalid selection: $selection. Please enter a number from 1 to 5."
             return
-        }
-
-        $inheritanceFlags = [System.Security.AccessControl.InheritanceFlags]::ContainerInherit, [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
-        $propagationFlags = [System.Security.AccessControl.PropagationFlags]::None
-
-        $accessRule = New-Object System.Security.AccessControl.FileSystemAccessRule(
-            $User,
-            $Permission,
-            $inheritanceFlags,
-            $propagationFlags,
-            [System.Security.AccessControl.AccessControlType]::Allow
-        )
-
-        $acl = Get-Acl -Path $FolderPath
-        $acl.SetAccessRule($accessRule)
-
-        try {
-            Set-Acl -Path $FolderPath -AclObject $acl
-            Write-Host "✅ $Permission permission set for $User on $FolderPath"
-        }
-        catch {
-            Write-Error "Failed to set ACL: $_"
         }
     }
 
+    if (-Not (Test-Path -Path $FolderPath)) {
+        Write-Error "❌ Folder path does not exist: $FolderPath"
+        return
+    }
 
+    $inheritanceFlags = [System.Security.AccessControl.InheritanceFlags]::ContainerInherit, [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
+    $propagationFlags = [System.Security.AccessControl.PropagationFlags]::None
+
+    $accessRule = New-Object System.Security.AccessControl.FileSystemAccessRule(
+        $User,
+        $Permission,
+        $inheritanceFlags,
+        $propagationFlags,
+        [System.Security.AccessControl.AccessControlType]::Allow
+    )
+
+    try {
+        $acl = Get-Acl -Path $FolderPath
+        $acl.SetAccessRule($accessRule)
+        Set-Acl -Path $FolderPath -AclObject $acl
+        Write-Host "✅ $Permission permission set for $User on $FolderPath" -ForegroundColor Green
+    }
+    catch {
+        Write-Error "❌ Failed to set ACL: $_"
+    }
+}
 
     #--------------------------------------------------------------------------------------------
 
@@ -503,141 +819,130 @@ function Find-MDOTAccountLR2 {
 
     # --------------------------------------------------------------------
 
-    function Add-SHARecord {
-        [CmdletBinding()]
-        param ()
+    
+function Add-SHARecordLR {
+    [CmdletBinding()]
+    param ()
 
-        # --- Fetch AD User Info ---
-        $userId = Read-Host "Enter UserID (sAMAccountName)"
-        $adUser = Get-ADUser -Identity $userId -Properties EmailAddress, GivenName, Surname, EmployeeID
-        if (-not $adUser) {
-            Write-Host "❌ User not found in AD." -ForegroundColor Red
-            return
-        }
-
-        # --- Ask which records to add ---
-        Write-Host "`nWhich record(s) do you want to add? (Enter numbers separated by comma, e.g. 1,2)"
-        Write-Host "1. Adds"
-        Write-Host "2. FMT"
-        Write-Host "3. License"
-        $recordTypes = Read-Host "Selection"
-        $selected = $recordTypes -split "," | ForEach-Object { $_.Trim() }
-
-        # --- Always collected fields (if needed for any selected sheet) ---
-        if ($selected -contains "1" -or $selected -contains "2") {
-            $ou = Read-Host "Which OU?"
-        }
-        if ($selected -contains "1" -or $selected -contains "3") {
-            $srNumber = Read-Host "SR#"
-        }
-        if ($selected -contains "3") {
-            $licenseType = Read-Host "Enter License Type (F3 or G3)"
-            $addedOrRemoved = Read-Host "Was the License Added or Removed?"
-            $creation = Read-Host "Is there a creation date? (yes/no)"
-            $creationDate = if ($creation -eq "yes") { (Get-Date).ToShortDateString() } else { "" }
-            $deletion = Read-Host "Is there a deletion date? (yes/no)"
-            $deletionDate = if ($deletion -eq "yes") { (Get-Date).ToShortDateString() } else { "" }
-        }
-
-        # --- Always reused fields ---
-        $email = $adUser.EmailAddress -replace '\.consultant'
-        $first = $adUser.GivenName
-        $last = $adUser.Surname
-        $ein = $adUser.EmployeeID
-        $workedBy = "LRichardson2"  # Always this value
-
-        # --- Now generate and save each record as needed ---
-        if ($selected -contains "1") {
-            $add = [PSCustomObject]@{
-                email           = $email
-                first_name      = $first
-                last_name       = $last
-                group_name      = "SHA"
-                OU              = $ou
-                'Creation Date' = (Get-Date).ToShortDateString()
-                'Notes'         = ""
-                'EIN?'          = $ein
-                'SR#'           = $srNumber
-                "Worked By"     = $workedBy
-            }
-            $addsPath = "\\shahqfs1\admshared\oit\TSD\Network\Document\Security Mentor\Current\Maryland_State_Trainee_Adds_2025.csv"
-            $add | Export-Csv -Path $addsPath -NoTypeInformation -Append
-            Write-Host "✅ 'Adds' record written."
-        }
-
-        if ($selected -contains "2") {
-            $fmt = [PSCustomObject]@{
-                email           = $email
-                first_name      = $first
-                last_name       = $last
-                group_name      = "SHA"
-                OU              = $ou
-                'Creation Date' = (Get-Date).ToShortDateString()
-                'Notes'         = ""
-                'EIN?'          = $ein
-            }
-            $fmtPath = "\\shahqfs1\admshared\oit\TSD\Network\Document\Security Mentor\Current\Maryland_State_FMT_Adds_2025.csv"
-            $fmt | Export-Csv -Path $fmtPath -NoTypeInformation -Append
-            Write-Host "✅ 'FMT' record written."
-        }
-
-        if ($selected -contains "3") {
-            $lic = [PSCustomObject]@{
-                email                   = $email
-                first_name              = $first
-                last_name               = $last
-                License_Type            = $licenseType
-                'SR#'                   = $srNumber
-                Worked_By               = $workedBy
-                'License_Added/Removed' = $addedOrRemoved
-                Notes                   = ""
-                Creation_Date           = $creationDate
-                Deletion_Date           = $deletionDate
-            }
-            # Write to CSV as before
-            $licCsvPath = "$HOME\Documents\LicenseInfo.csv"
-            $lic | Export-Csv -Path $licCsvPath -NoTypeInformation -Append
-            Write-Host "✅ 'License' record written to CSV."
-
-            # Write to Excel (worksheet SHA_Licenses, hardcoded path)
-            $pathToExcel = '\\shahqfs1\admshared\oit\TSD\Network\Document\Security Mentor\Current\SHA_Licenses.xlsx'
-            $worksheetName = 'SHA_Licenses'
-            $lic | Export-Excel -Path $pathToExcel -WorksheetName $worksheetName -Append
-            Write-Host "✅ 'License' record appended to Excel worksheet ($worksheetName)."
-        }
-
-        Write-Host "`nAll selected records have been processed."
+    # --- Fetch AD User Info ---
+    $userId = Read-Host "Enter UserID (sAMAccountName)"
+    $adUser = Get-ADUser -Identity $userId -Properties EmailAddress, GivenName, Surname, EmployeeID
+    if (-not $adUser) {
+        Write-Host "❌ User not found in AD." -ForegroundColor Red
+        return
     }
 
-    # --------------------------------------------------------------------
+    # --- Ask which records to add ---
+    Write-Host "`nWhich record(s) do you want to add? (Enter numbers separated by comma, e.g. 1,2)"
+    Write-Host "1. Adds"
+    Write-Host "2. FMT"
+    Write-Host "3. License"
+    $recordTypes = Read-Host "Selection"
+    $selected = $recordTypes -split "," | ForEach-Object { $_.Trim() }
 
+    # --- Always collected fields (if needed for any selected sheet) ---
+    if ($selected -contains "1" -or $selected -contains "2") {
+        $ou = Read-Host "Which OU?"
+    }
+    if ($selected -contains "1" -or $selected -contains "3") {
+        $srNumber = Read-Host "SR#"
+    }
 
+    # --- License specific input ---
+    if ($selected -contains "3") {
+        # License Type: Enforce input 1 or 2 for F3 or G5
+        do {
+            $licenseChoice = Read-Host "Enter License Type (1 for F3, 2 for G5)"
+        } while ($licenseChoice -notin "1","2")
+        $licenseType = if ($licenseChoice -eq "1") { "F3" } else { "G5" }
 
-    function Clear-ADExtensionAttribute1 {
-        [CmdletBinding()]
-        param (
-            [Parameter(Mandatory = $true, Position = 0)]
-            [string]$a
-        )
+        # License Added or Removed: Enforce input 1 or 2
+        do {
+            $addedOrRemovedChoice = Read-Host "Was the License Added or Removed? (1 for Added, 2 for Removed)"
+        } while ($addedOrRemovedChoice -notin "1","2")
+        $addedOrRemoved = if ($addedOrRemovedChoice -eq "1") { "Added" } else { "Removed" }
 
-        # Import the Active Directory module if it's not already loaded
-        if (-not (Get-Module -Name ActiveDirectory)) {
-            Import-Module ActiveDirectory
+        # Set dates based on added or removed
+        if ($addedOrRemoved -eq "Added") {
+            $creationDate = (Get-Date).ToShortDateString()
+            $deletionDate = ""
         }
-
-        try {
-            # Retrieve the user object
-            $User = Get-ADUser -Identity $a -ErrorAction Stop
-
-            # Clear ExtensionAttribute1
-            Set-ADUser -Identity $User -Clear ExtensionAttribute1
-
-            Write-Host "ExtensionAttribute1 successfully cleared for $a."
-        }
-        catch {
-            Write-Host "Error: $_"
+        else {
+            $creationDate = ""
+            $deletionDate = (Get-Date).ToShortDateString()
         }
     }
+
+    # --- Always reused fields ---
+    $email = $adUser.EmailAddress -replace '\.consultant'
+    $first = $adUser.GivenName
+    $last = $adUser.Surname
+    $ein = $adUser.EmployeeID
+    $workedBy = "LRichardson2"  # Always this value
+
+    # --- Generate and save each record as needed ---
+    if ($selected -contains "1") {
+        $add = [PSCustomObject]@{
+            email           = $email
+            first_name      = $first
+            last_name       = $last
+            group_name      = "SHA"
+            OU              = $ou
+            'Creation Date' = (Get-Date).ToShortDateString()
+            'Notes'         = ""
+            'EIN?'          = $ein
+            'SR#'           = $srNumber
+            "Worked By"     = $workedBy
+        }
+        $addsPath = "\\shahqfs1\admshared\oit\TSD\Network\Document\Security Mentor\Current\Maryland_State_Trainee_Adds_2025.csv"
+        $add | Export-Csv -Path $addsPath -NoTypeInformation -Append
+        Write-Host "✅ 'Adds' record written."
+    }
+
+    if ($selected -contains "2") {
+        $fmt = [PSCustomObject]@{
+            email           = $email
+            first_name      = $first
+            last_name       = $last
+            group_name      = "SHA"
+            OU              = $ou
+            'Creation Date' = (Get-Date).ToShortDateString()
+            'Notes'         = ""
+            'EIN?'          = $ein
+        }
+        $fmtPath = "\\shahqfs1\admshared\oit\TSD\Network\Document\Security Mentor\Current\Maryland_State_FMT_Adds_2025.csv"
+        $fmt | Export-Csv -Path $fmtPath -NoTypeInformation -Append
+        Write-Host "✅ 'FMT' record written."
+    }
+
+    if ($selected -contains "3") {
+        $lic = [PSCustomObject]@{
+            email                   = $email
+            first_name              = $first
+            last_name               = $last
+            License_Type            = $licenseType
+            'SR#'                   = $srNumber
+            Worked_By               = $workedBy
+            'License_Added/Removed' = $addedOrRemoved
+            Notes                   = ""
+            Creation_Date           = $creationDate
+            Deletion_Date           = $deletionDate
+        }
+        # Write to CSV
+        $licCsvPath = "$HOME\Documents\LicenseInfo.csv"
+        $lic | Export-Csv -Path $licCsvPath -NoTypeInformation -Append
+        Write-Host "✅ 'License' record written to CSV."
+
+        # Write to Excel (using ImportExcel module)
+        $pathToExcel = '\\shahqfs1\admshared\oit\TSD\Network\Document\Security Mentor\Current\SHA_Licenses.xlsx'
+        $worksheetName = 'SHA_Licenses'
+        $lic | Export-Excel -Path $pathToExcel -WorksheetName $worksheetName -Append
+        Write-Host "✅ 'License' record appended to Excel worksheet ($worksheetName)."
+    }
+
+    Write-Host "`nAll selected records have been processed."
+}
+
 
     #--------------------------------------------------------------------------------------------
     #Get applications installed on a remote computer that are not Microsoft applications
