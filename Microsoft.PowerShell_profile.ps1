@@ -4,6 +4,17 @@ set-PSReadLineOption -PredictionViewStyle ListView
 #--------------------------------------------------------------------------------------------
 #--------------------------------------------------------------------------------------------
 #--------------------------------------------------------------------------------------------
+ function Show-AclLR {
+    param (
+        [Parameter(Mandatory)]
+        [string]$Path
+    )
+
+    (Get-Acl $Path).Access |
+        Sort-Object FileSystemRights |
+        Format-Table FileSystemRights, IsInherited, IdentityReference
+}
+
 #--------------------------------------------------------------------------------------------
 #Record PowerShell session logs
 
